@@ -1,6 +1,14 @@
 import datetime
+import json
 import os
 from io import BytesIO
+
+try:
+    # Optional: load local .env for development if python-dotenv is installed
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 
 import jwt
 import pandas as pd
@@ -16,10 +24,28 @@ from psycopg2.extras import RealDictCursor
 # Google Drive API Configuration #
 # ------------------------------ #
 SCOPES = ['https://www.googleapis.com/auth/drive']
-SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_CREDENTIALS", "hostelmanagement-455018-5e40c6a6113c.json")
 UPLOAD_FOLDER_ID = os.getenv("UPLOAD_FOLDER_ID", "1-bPtMwp6rPE3D2yqmk5qnq8Ytvl_O07A")
 
-creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+# Credential loading:
+# - If GOOGLE_CREDENTIALS_JSON is set, it's expected to contain the full service account JSON
+#   (useful for CI or when injecting secrets via environment variables).
+# - Otherwise GOOGLE_CREDENTIALS should point to a local path to the JSON file.
+service_account_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+service_account_path = os.getenv("GOOGLE_CREDENTIALS")
+
+if service_account_json:
+    try:
+        info = json.loads(service_account_json)
+    except Exception:
+        raise RuntimeError("Invalid JSON in GOOGLE_CREDENTIALS_JSON")
+    creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+elif service_account_path and os.path.exists(service_account_path):
+    creds = service_account.Credentials.from_service_account_file(service_account_path, scopes=SCOPES)
+else:
+    raise RuntimeError(
+        "Google service account not configured. Set GOOGLE_CREDENTIALS (path) or GOOGLE_CREDENTIALS_JSON (JSON string)"
+    )
+
 drive_service = build('drive', 'v3', credentials=creds)
 
 # ------------------------------ #
@@ -33,12 +59,17 @@ SECRET_KEY = "your_secret_key_here"  # Use a strong key in production
 # Database Connection            #
 # ------------------------------ #
 def get_db_connection():
+    db_name = os.getenv("PG_NAME", "hostel_report")
+    db_user = os.getenv("PG_USER", "postgres")
+    db_password = os.getenv("PG_PASSWORD", "ankit123")
+    db_host = os.getenv("PG_HOST", "localhost")
+    db_port = os.getenv("PG_PORT", "5432")
     return psycopg2.connect(
-        database="hostel_report",
-        user="postgres",
-        password="ankit123",
-        host="localhost",
-        port="5432"
+        database=db_name,
+        user=db_user,
+        password=db_password,
+        host=db_host,
+        port=db_port
     )
 
 # ------------------------------ #
