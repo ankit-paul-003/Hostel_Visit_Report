@@ -16,18 +16,43 @@ from psycopg2.extras import RealDictCursor
 # Google Drive API Configuration #
 # ------------------------------ #
 SCOPES = ['https://www.googleapis.com/auth/drive']
-SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_CREDENTIALS", "hostelmanagement-455018-738f7811d39e.json")
+SERVICE_ACCOUNT_FILE = os.getenv("GOOGLE_CREDENTIALS", "hostelmanagement-455018-5e40c6a6113c.json")
 UPLOAD_FOLDER_ID = os.getenv("UPLOAD_FOLDER_ID", "1-bPtMwp6rPE3D2yqmk5qnq8Ytvl_O07A")
 
 creds = service_account.Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 drive_service = build('drive', 'v3', credentials=creds)
 
 # ------------------------------ #
-# Flask Setup                    #
+# Flask Setup with Proper CORS   #
 # ------------------------------ #
 app = Flask(__name__)
-CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:5173"}})
 SECRET_KEY = "your_secret_key_here"  # Use a strong key in production
+
+# Apply CORS globally
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": "http://localhost:5173"}})
+
+# Global after_request to fix preflight issues
+@app.after_request
+def after_request(response):
+    response.headers.add("Access-Control-Allow-Origin", "http://localhost:5173")
+    response.headers.add("Access-Control-Allow-Headers", "Content-Type,Authorization")
+    response.headers.add("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
+    return response
+
+# Example: proper OPTIONS handling
+@app.route('/forms', methods=['GET', 'OPTIONS'])
+def get_forms():
+    if request.method == "OPTIONS":
+        return jsonify({"message": "Preflight OK"}), 200
+
+    conn = get_db_connection()
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    cur.execute("SELECT * FROM reports")
+    forms = cur.fetchall()
+    cur.close()
+    conn.close()
+    return jsonify(forms)
+
 
 # ------------------------------ #
 # Database Connection            #
@@ -63,8 +88,11 @@ def verify_token(token):
 # ------------------------------ #
 # Teacher Login                  #
 # ------------------------------ #
-@app.route('/teacher-login', methods=['POST'])
+@app.route('/teacher-login', methods=['POST', 'OPTIONS'])
 def teacher_login():
+    if request.method == "OPTIONS":
+        return "", 200
+
     data = request.json
     teacher_id = data.get("teacherId")
     password = data.get("password")
@@ -88,8 +116,11 @@ def teacher_login():
 # ------------------------------ #
 # Admin Login                    #
 # ------------------------------ #
-@app.route('/admin-login', methods=['POST'])
+@app.route('/admin-login', methods=['POST', 'OPTIONS'])
 def admin_login():
+    if request.method == "OPTIONS":
+        return "", 200
+
     data = request.json
     admin_id = data.get("adminId")
     password = data.get("password")
@@ -114,8 +145,11 @@ def admin_login():
 # ------------------------------ #
 # Get Teachers                   #
 # ------------------------------ #
-@app.route('/teachers', methods=['GET'])
+@app.route('/teachers', methods=['GET', 'OPTIONS'])
 def get_teachers():
+    if request.method == "OPTIONS":
+        return "", 200
+
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT id, name FROM teachers")
@@ -127,8 +161,11 @@ def get_teachers():
 # ------------------------------ #
 # Get Reports                    #
 # ------------------------------ #
-@app.route('/forms', methods=['GET'])
+@app.route('/forms', methods=['GET', 'OPTIONS'])
 def get_forms():
+    if request.method == "OPTIONS":
+        return "", 200
+
     conn = get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("SELECT * FROM reports")
@@ -140,8 +177,11 @@ def get_forms():
 # ------------------------------ #
 # Submit Form                    #
 # ------------------------------ #
-@app.route('/submit-form', methods=['POST'])
+@app.route('/submit-form', methods=['POST', 'OPTIONS'])
 def submit_form():
+    if request.method == "OPTIONS":
+        return "", 200
+
     token = request.headers.get("Authorization")
     if not token or not token.startswith("Bearer "):
         return jsonify({"success": False, "message": "Missing or invalid token"}), 403
@@ -193,8 +233,11 @@ def submit_form():
 # ------------------------------ #
 # Add Teacher                    #
 # ------------------------------ #
-@app.route('/add-teacher', methods=['POST'])
+@app.route('/add-teacher', methods=['POST', 'OPTIONS'])
 def add_teacher():
+    if request.method == "OPTIONS":
+        return "", 200
+
     data = request.json
     teacher_name = data.get("name")
     password = data.get("password")
@@ -221,11 +264,7 @@ def add_teacher():
 @app.route('/delete-teacher/<int:teacher_id>', methods=['DELETE', 'OPTIONS'])
 def delete_teacher(teacher_id):
     if request.method == "OPTIONS":
-        response = jsonify({"message": "CORS preflight successful"})
-        response.headers.add("Access-Control-Allow-Origin", "*")
-        response.headers.add("Access-Control-Allow-Methods", "DELETE, OPTIONS")
-        response.headers.add("Access-Control-Allow-Headers", "Authorization, Content-Type")
-        return response, 200
+        return "", 200
 
     conn = get_db_connection()
     cur = conn.cursor()
@@ -233,85 +272,8 @@ def delete_teacher(teacher_id):
         cur.execute("DELETE FROM teachers WHERE id = %s", (teacher_id,))
         conn.commit()
         return jsonify({"message": "Teacher deleted successfully"}), 200
-    except Exception as e:
-        return jsonify({"error": "Failed to delete teacher"}), 500
+    except psycopg2.Error as e:
+        return jsonify({"error": "Database error", "details": str(e)}), 500
     finally:
         cur.close()
         conn.close()
-
-# ------------------------------ #
-# Delete Form (Only Paul)        #
-# ------------------------------ #
-@app.route('/delete-form/<int:form_id>', methods=['DELETE', 'OPTIONS'])
-def delete_form(form_id):
-    if request.method == "OPTIONS":
-        response = jsonify({"success": True, "message": "CORS preflight successful"})
-        response.headers.add("Access-Control-Allow-Origin", "http://localhost:5173")
-        response.headers.add("Access-Control-Allow-Methods", "DELETE, OPTIONS")
-        response.headers.add("Access-Control-Allow-Headers", "Authorization, Content-Type")
-        return response, 200
-
-    token = request.headers.get("Authorization")
-    if not token:
-        return jsonify({"success": False, "message": "Unauthorized - No token provided"}), 401
-
-    decoded_token = verify_token(token.split("Bearer ")[1])
-    if not decoded_token or decoded_token.get("user_type") != "Paul":
-        return jsonify({"success": False, "message": "Unauthorized - Only Paul can delete forms"}), 403
-
-    conn = get_db_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute("DELETE FROM reports WHERE id = %s", (form_id,))
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
-
-    response = jsonify({"success": True, "message": "Form deleted successfully"})
-    response.headers.add("Access-Control-Allow-Origin", "http://localhost:5173")
-    return response
-
-# ------------------------------ #
-# Download Report                #
-# ------------------------------ #
-@app.route('/download/<string:period>', methods=['GET'])
-def download_report(period):
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    query = {
-        "weekly": "SELECT * FROM reports WHERE created_at >= NOW() - INTERVAL '7 days'",
-        "monthly": "SELECT * FROM reports WHERE created_at >= NOW() - INTERVAL '1 month'",
-        "yearly": "SELECT * FROM reports WHERE created_at >= NOW() - INTERVAL '1 year'"
-    }.get(period)
-
-    if not query:
-        return jsonify({"error": "Invalid period"}), 400
-
-    cur.execute(query)
-    rows = cur.fetchall()
-    column_names = [desc[0] for desc in cur.description]
-
-    cur.close()
-    conn.close()
-
-    if not rows:
-        return jsonify({"error": "No data available"}), 404
-
-    df = pd.DataFrame(rows, columns=column_names)
-    output = BytesIO()
-    df.to_excel(output, index=False, engine='openpyxl')
-    output.seek(0)
-
-    return Response(
-        output.getvalue(),
-        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=report_{period}.xlsx"}
-    )
-
-# ------------------------------ #
-# Run Server                     #
-# ------------------------------ #
-if __name__ == "__main__":
-    app.run(debug=True)
